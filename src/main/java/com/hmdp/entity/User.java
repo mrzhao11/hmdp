@@ -29,6 +29,9 @@ public class User implements Serializable {
     /**
      * 主键
      */
+    // @TableId注解用于指定实体类中的某个字段作为数据库表的主键。
+    // value属性指定数据库表中的列名，type属性指定主键生成策略。
+    // IdType.AUTO表示主键由数据库自动生成，通常是自增类型。
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 

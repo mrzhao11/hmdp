@@ -14,6 +14,7 @@ import com.hmdp.service.IUserService;
 import com.hmdp.utils.RegexUtils;
 import com.hmdp.utils.UserHolder;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.connection.BitFieldSubCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -40,8 +41,12 @@ import static com.hmdp.utils.SystemConstants.USER_NICK_NAME_PREFIX;
  */
 @Slf4j
 @Service
+// 继承MyBatis-Plus提供的ServiceImpl，简化CRUD操作
+// 具体是继承了ServiceImpl<M extends BaseMapper<T>, T>，其中M是Mapper接口，T是实体类
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
 
+    // @Resource是Java中的注解，用于依赖注入。它可以自动将所需的Bean注入到被注解的字段、方法或构造函数中。
+    // 与Spring框架中的@Autowired类似，但@Resource是Java标准的一部分，而@Autowired是Spring特有的。
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
@@ -55,7 +60,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         // 3.符合，生成验证码
         String code = RandomUtil.randomNumbers(6);
 
-        // 4.保存验证码到 session
+        // 4.保存验证码到 redis
+        // key 手机号  value 验证码  设置过期时间
         stringRedisTemplate.opsForValue().set(LOGIN_CODE_KEY + phone, code, LOGIN_CODE_TTL, TimeUnit.MINUTES);
 
         // 5.发送验证码
@@ -81,6 +87,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
 
         // 4.一致，根据手机号查询用户 select * from tb_user where phone = ?
+        // query()是MyBatis-Plus提供的一个方法，用于构建查询条件。 它返回一个QueryWrapper对象，允许你链式调用各种条件方法来构建SQL查询。
         User user = query().eq("phone", phone).one();
 
         // 5.判断用户是否存在
@@ -96,8 +103,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
         Map<String, Object> userMap = BeanUtil.beanToMap(userDTO, new HashMap<>(),
                 CopyOptions.create()
-                        .setIgnoreNullValue(true)
-                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+                        .setIgnoreNullValue(true) // 忽略null值
+                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString())); // 将属性值转换为字符串
         // 7.3.存储
         String tokenKey = LOGIN_USER_KEY + token;
         stringRedisTemplate.opsForHash().putAll(tokenKey, userMap);
