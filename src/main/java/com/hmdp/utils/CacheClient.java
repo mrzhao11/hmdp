@@ -19,6 +19,7 @@ import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
 
 @Slf4j
 @Component
+// 缓存工具类
 public class CacheClient {
 
     private final StringRedisTemplate stringRedisTemplate;
@@ -29,10 +30,12 @@ public class CacheClient {
         this.stringRedisTemplate = stringRedisTemplate;
     }
 
+    // 写入缓存
     public void set(String key, Object value, Long time, TimeUnit unit) {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(value), time, unit);
     }
 
+    // 设置逻辑过期
     public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
         // 设置逻辑过期
         RedisData redisData = new RedisData();
@@ -42,6 +45,11 @@ public class CacheClient {
         stringRedisTemplate.opsForValue().set(key, JSONUtil.toJsonStr(redisData));
     }
 
+    // 解决缓存穿透
+    // 用任意类型的ID去查询任意类型的对象R
+    // <R,ID> R表示返回值类型，ID表示传入的id类型
+    // Class<R> type表示R类型的Class对象，java的泛型在运行时会被擦除，所以需要传入Class对象以便反序列化
+    // Function<ID, R> dbFallback表示一个函数式接口，接受ID类型的参数，返回R类型的结果，用于从数据库查询数据，也就是传进来一个根据ID查询R对象的函数
     public <R,ID> R queryWithPassThrough(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit){
         String key = keyPrefix + id;
@@ -72,6 +80,13 @@ public class CacheClient {
         return r;
     }
 
+    // 解决缓存击穿
+    // 用逻辑过期时间来解决缓存击穿
+    // 用任意类型的ID去查询任意类型的对象R
+    // <R,ID> R表示返回值类型，ID表示传入的id类型
+    // Class<R> type表示R类型的Class对象，java的泛型在运行时会被擦除，所以需要传入Class对象以便反序列化
+    // Function<ID, R> dbFallback表示一个函数式接口，接受ID类型的参数，返回R类型的结果，用于从数据库查询数据，也就是传进来一个根据ID查询R对象的函数
+    // Long time, TimeUnit unit表示逻辑过期时间
     public <R, ID> R queryWithLogicalExpire(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
@@ -83,6 +98,7 @@ public class CacheClient {
             return null;
         }
         // 4.命中，需要先把json反序列化为对象
+        // 反序列化json为RedisData对象
         RedisData redisData = JSONUtil.toBean(json, RedisData.class);
         R r = JSONUtil.toBean((JSONObject) redisData.getData(), type);
         LocalDateTime expireTime = redisData.getExpireTime();
@@ -117,6 +133,7 @@ public class CacheClient {
         return r;
     }
 
+    // 解决缓存击穿
     public <R, ID> R queryWithMutex(
             String keyPrefix, ID id, Class<R> type, Function<ID, R> dbFallback, Long time, TimeUnit unit) {
         String key = keyPrefix + id;
@@ -166,11 +183,13 @@ public class CacheClient {
         return r;
     }
 
+    // 尝试获取互斥锁
     private boolean tryLock(String key) {
         Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, "1", 10, TimeUnit.SECONDS);
         return BooleanUtil.isTrue(flag);
     }
 
+    // 释放锁
     private void unlock(String key) {
         stringRedisTemplate.delete(key);
     }
