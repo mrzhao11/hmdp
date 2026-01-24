@@ -35,6 +35,9 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
     @Resource
     private IUserService userService;
 
+    /*
+        * 关注或取关用户
+     */
     @Override
     public Result follow(Long followUserId, Boolean isFollow) {
         // 1.获取登录用户
@@ -49,6 +52,7 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
             boolean isSuccess = save(follow);
             if (isSuccess) {
                 // 把关注用户的id，放入redis的set集合 sadd userId followerUserId
+                // 方便后续利用Redis集合的交集，来做共同关注
                 stringRedisTemplate.opsForSet().add(key, followUserId.toString());
             }
         } else {
@@ -63,6 +67,9 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         return Result.ok();
     }
 
+    /*
+        * 是否关注某用户
+     */
     @Override
     public Result isFollow(Long followUserId) {
         // 1.获取登录用户
@@ -73,6 +80,9 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
         return Result.ok(count > 0);
     }
 
+    /*
+        * 共同关注
+     */
     @Override
     public Result followCommons(Long id) {
         // 1.获取当前用户
@@ -86,11 +96,12 @@ public class FollowServiceImpl extends ServiceImpl<FollowMapper, Follow> impleme
             return Result.ok(Collections.emptyList());
         }
         // 3.解析id集合
+        // 把String类型的id转换为Long类型
         List<Long> ids = intersect.stream().map(Long::valueOf).collect(Collectors.toList());
         // 4.查询用户
         List<UserDTO> users = userService.listByIds(ids)
                 .stream()
-                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class)) // 转换为UserDTO
                 .collect(Collectors.toList());
         return Result.ok(users);
     }

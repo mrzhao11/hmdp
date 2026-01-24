@@ -22,7 +22,7 @@ import java.time.LocalDateTime;
 @Data
 @EqualsAndHashCode(callSuper = false)
 @Accessors(chain = true)
-@TableName("tb_blog")
+@TableName("tb_blog") // 对应数据库表名
 public class Blog implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -43,7 +43,7 @@ public class Blog implements Serializable {
     /**
      * 用户图标
      */
-    @TableField(exist = false)
+    @TableField(exist = false) // 表中不存在该字段
     private String icon;
     /**
      * 用户姓名

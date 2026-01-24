@@ -80,6 +80,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         return Result.ok(blog);
     }
 
+    // 判断博客是否被点赞
     private void isBlogLiked(Blog blog) {
         // 1.获取登录用户
         UserDTO user = UserHolder.getUser();
@@ -91,7 +92,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         // 2.判断当前登录用户是否已经点赞
         String key = "blog:liked:" + blog.getId();
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
-        blog.setIsLike(score != null);
+        blog.setIsLike(score != null); // 已点赞返回true，未点赞返回false
     }
 
     @Override
@@ -99,14 +100,16 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         // 1.获取登录用户
         Long userId = UserHolder.getUser().getId();
         // 2.判断当前登录用户是否已经点赞
-        String key = BLOG_LIKED_KEY + id;
-        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
+        String key = BLOG_LIKED_KEY + id; // blog:liked:1
+        // Score代表分数
+        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString()); // zscore key value
         if (score == null) {
             // 3.如果未点赞，可以点赞
             // 3.1.数据库点赞数 + 1
             boolean isSuccess = update().setSql("liked = liked + 1").eq("id", id).update();
             // 3.2.保存用户到Redis的set集合  zadd key value score
             if (isSuccess) {
+                // 使用当前时间作为评分，保证排序的正确性
                 stringRedisTemplate.opsForZSet().add(key, userId.toString(), System.currentTimeMillis());
             }
         } else {
@@ -121,9 +124,10 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         return Result.ok();
     }
 
+    // 查询博客点赞用户top5
     @Override
     public Result queryBlogLikes(Long id) {
-        String key = BLOG_LIKED_KEY + id;
+        String key = BLOG_LIKED_KEY + id; // blog:liked:1
         // 1.查询top5的点赞用户 zrange key 0 4
         Set<String> top5 = stringRedisTemplate.opsForZSet().range(key, 0, 4);
         if (top5 == null || top5.isEmpty()) {
@@ -131,13 +135,13 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
         // 2.解析出其中的用户id
         List<Long> ids = top5.stream().map(Long::valueOf).collect(Collectors.toList());
-        String idStr = StrUtil.join(",", ids);
-        // 3.根据用户id查询用户 WHERE id IN ( 5 , 1 ) ORDER BY FIELD(id, 5, 1)
+        String idStr = StrUtil.join(",", ids); // 把id用逗号连接起来 5,1
+        // 3.根据用户id查询用户 WHERE id IN ( 5 , 1 ) ORDER BY FIELD(id, 5, 1) // 保持顺序一致
         List<UserDTO> userDTOS = userService.query()
-                .in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list()
-                .stream()
-                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
-                .collect(Collectors.toList());
+                .in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list() // 保持查询顺序和点赞顺序一致
+                .stream() // 转换为流
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class)) // 转换为UserDTO
+                .collect(Collectors.toList()); // 收集为List
         // 4.返回
         return Result.ok(userDTOS);
     }
@@ -159,29 +163,33 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
             // 4.1.获取粉丝id
             Long userId = follow.getUserId();
             // 4.2.推送
-            String key = FEED_KEY + userId;
+            String key = FEED_KEY + userId; // feed:用户id
+            // zadd key value score
+            // 把笔记id存入到收件箱中，也就是redis的有序集合中，分数就是时间戳
             stringRedisTemplate.opsForZSet().add(key, blog.getId().toString(), System.currentTimeMillis());
         }
         // 5.返回id
         return Result.ok(blog.getId());
     }
 
+    // 实现滚动分页查询关注的博文
     @Override
     public Result queryBlogOfFollow(Long max, Integer offset) {
         // 1.获取当前用户
         Long userId = UserHolder.getUser().getId();
         // 2.查询收件箱 ZREVRANGEBYSCORE key Max Min LIMIT offset count
         String key = FEED_KEY + userId;
+        // 2.1.查询分数小于等于max的2条数据，跳过offset条
         Set<ZSetOperations.TypedTuple<String>> typedTuples = stringRedisTemplate.opsForZSet()
                 .reverseRangeByScoreWithScores(key, 0, max, offset, 2);
         // 3.非空判断
         if (typedTuples == null || typedTuples.isEmpty()) {
             return Result.ok();
         }
-        // 4.解析数据：blogId、minTime（时间戳）、offset
-        List<Long> ids = new ArrayList<>(typedTuples.size());
-        long minTime = 0; // 2
-        int os = 1; // 2
+        // 4.解析数据：blogId、minTime（时间戳）、offset（跟上次最小值相同的数量）
+        List<Long> ids = new ArrayList<>(typedTuples.size()); // 存放blogId
+        long minTime = 0; // 记录本次查询的最小时间戳
+        int os = 1; // 记录偏移量，默认为1
         for (ZSetOperations.TypedTuple<String> tuple : typedTuples) { // 5 4 4 2 2
             // 4.1.获取id
             ids.add(Long.valueOf(tuple.getValue()));
@@ -197,7 +205,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
         // 5.根据id查询blog
         String idStr = StrUtil.join(",", ids);
-        List<Blog> blogs = query().in("id", ids).last("ORDER BY FIELD(id," + idStr + ")").list();
+        List<Blog> blogs = query()
+                .in("id", ids)
+                .last("ORDER BY FIELD(id," + idStr + ")").list();// 保持顺序一致
 
         for (Blog blog : blogs) {
             // 5.1.查询blog有关的用户
@@ -215,6 +225,7 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         return Result.ok(r);
     }
 
+    // 查询博客有关的用户
     private void queryBlogUser(Blog blog) {
         Long userId = blog.getUserId();
         User user = userService.getById(userId);

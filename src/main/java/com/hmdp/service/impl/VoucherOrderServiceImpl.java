@@ -54,6 +54,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     private RedissonClient redissonClient;
 
+    // Lua脚本, 用于实现秒杀功能的原子操作
     private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
 
     static {
@@ -62,16 +63,18 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         SECKILL_SCRIPT.setResultType(Long.class);
     }
 
+    // 创建线程池
     private static final ExecutorService SECKILL_ORDER_EXECUTOR = Executors.newSingleThreadExecutor();
 
-    @PostConstruct
-    private void init(){
-        // TODO 需要秒杀下单功能的同学自己解开下面的注释
-        SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
+    @PostConstruct // 在当前类初始化完成后执行
+    private void init() {
+        SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler()); // 启动订单处理线程
     }
 
-    private class VoucherOrderHandler implements Runnable{
+    // 订单处理类, 用于消费消息队列中的订单信息
+    private class VoucherOrderHandler implements Runnable {
         private final String queueName = "stream.orders";
+
         @Override
         public void run() {
             while (true) {
@@ -104,7 +107,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             }
         }
 
-        public void initStream(){
+        public void initStream() {
             Boolean exists = stringRedisTemplate.hasKey(queueName);
             if (BooleanUtil.isFalse(exists)) {
                 log.info("stream不存在，开始创建stream");
@@ -115,7 +118,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             }
             // stream存在，判断group是否存在
             StreamInfo.XInfoGroups groups = stringRedisTemplate.opsForStream().groups(queueName);
-            if(groups.isEmpty()){
+            if (groups.isEmpty()) {
                 log.info("group不存在，开始创建group");
                 // group不存在，创建group
                 stringRedisTemplate.opsForStream().createGroup(queueName, ReadOffset.latest(), "g1");
@@ -152,7 +155,9 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
+    // 处理订单, 使用分布式锁解决一人一单问题
     private void handleVoucherOrder(VoucherOrder voucherOrder) {
+        // 注意这里不能从UserHolder获取用户id，因为是另一个线程，UserHolder中没有用户信息
         Long userId = voucherOrder.getId();
         // 创建锁对象
         // SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
@@ -160,7 +165,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 获取锁
         boolean isLock = lock.tryLock();
         // 判断是否获取锁成功
-        if(!isLock){
+        if (!isLock) {
             // 获取锁失败，返回错误或重试
             log.error("不允许重复下单");
             return;
@@ -174,15 +179,17 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
     }
 
-    IVoucherOrderService proxy;
+    IVoucherOrderService proxy; // 当前类的代理对象
+
     @Override
+    // 秒杀功能, 使用lua脚本解决高并发下的超卖问题
     public Result seckillVoucher(Long voucherId) {
         Long userId = UserHolder.getUser().getId();
         long orderId = redisIdWorker.nextId("order");
         // 1.执行lua脚本
         Long result = stringRedisTemplate.execute(
                 SECKILL_SCRIPT,
-                Collections.emptyList(),
+                Collections.emptyList(), // 没有key
                 voucherId.toString(), userId.toString(), String.valueOf(orderId)
         );
         int r = result.intValue();
@@ -192,11 +199,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail(r == 1 ? "库存不足" : "不能重复下单");
         }
         // 3.获取代理对象
+        // 在主线程中获取代理对象，以便后续创建订单时使用事务
         proxy = (IVoucherOrderService) AopContext.currentProxy();
         // 4.返回订单id
         return Result.ok(orderId);
     }
 
+    // 创建订单, 使用事务保证数据一致性
     @Transactional
     public void createVoucherOrder(VoucherOrder voucherOrder) {
         // 5.一人一单
@@ -227,7 +236,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     }
 
    /*
-
+    //  下面的代码是使用阻塞队列实现的秒杀功能，注释掉以免和上面的代码冲突
     private BlockingQueue<VoucherOrder> orderTasks = new ArrayBlockingQueue<>(1024 * 1024);
     private class VoucherOrderHandler implements Runnable{
         @Override
@@ -277,6 +286,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         return Result.ok(orderId);
     }*/
     /*@Override
+    @Transactional
     public Result seckillVoucher(Long voucherId) {
         // 1.查询优惠券
         SeckillVoucher voucher = seckillVoucherService.getById(voucherId);
@@ -297,6 +307,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         Long userId = UserHolder.getUser().getId();
+        // 分布式锁
         // 创建锁对象
         // SimpleRedisLock lock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
         RLock lock = redissonClient.getLock("lock:order:" + userId);
@@ -309,6 +320,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
         try {
             // 获取代理对象（事务）
+            // spring的事物是通过动态代理实现的，如果直接调用当前对象的方法，事务不会生效
+            // 需要通过AopContext获取当前对象的代理对象，然后调用代理对象的方法，事务才会生效
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
         } finally {
@@ -323,6 +336,11 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         // 5.一人一单
         Long userId = UserHolder.getUser().getId();
 
+        // 给下面的代码加锁，锁的粒度：每个用户一个锁
+        // 如果只锁userId，两个请求进来，userId相同，但是饮用不同，相当于是两个不同的锁
+        // 解决方法：使用intern()，该方法会从JVM的字符串常量池中找到这个字符串
+        // 如果已经存在，就返回引用；如果不存在，就把这个字符串放到常量池中，然后返回引用
+        // 这样即使是不同的引用，只要内容相同，返回的引用也是相同的
         synchronized (userId.toString().intern()) {
             // 5.1.查询订单
             int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();

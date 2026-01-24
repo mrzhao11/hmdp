@@ -173,6 +173,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         return Result.ok(count);
     }
 
+    @Override
+    public Result logout() {
+        // 获取当前登录用户的id
+        Long userId = UserHolder.getUser().getId();
+        // 构建Redis中存储用户信息的key
+        String tokenKey = LOGIN_USER_KEY + userId;
+        // 删除Redis中存储的用户信息
+        stringRedisTemplate.delete(tokenKey);
+        return Result.ok();
+    }
+
     private User createUserWithPhone(String phone) {
         // 1.创建用户
         User user = new User();

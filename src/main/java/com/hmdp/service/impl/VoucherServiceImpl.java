@@ -42,6 +42,7 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
 
     @Override
     @Transactional
+    // 添加秒杀优惠券的同时，保存秒杀信息到redis中
     public void addSeckillVoucher(Voucher voucher) {
         // 保存优惠券
         save(voucher);
@@ -53,6 +54,7 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucher.setEndTime(voucher.getEndTime());
         seckillVoucherService.save(seckillVoucher);
         // 保存秒杀库存到Redis中
+        // key: seckill:stock:voucherId  value: stock   string类型
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY + voucher.getId(), voucher.getStock().toString());
     }
 }
