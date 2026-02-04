@@ -17,6 +17,23 @@ spring:
         max-idle: 10
         min-idle: 1
         time-between-eviction-runs: 10s
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092
+    producer:
+      acks: all    # 确认级别，确保消息不丢失
+      retries: 3   # 重试次数
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true # 启用幂等性，防止重复发送
+    consumer:
+      group-id: seckill-order-consumer
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      ack-mode: record # 按记录确认
   jackson:
     default-property-inclusion: non_null # JSON处理时忽略非空字段
 mybatis-plus:
@@ -26,3 +43,11 @@ logging:
     com.hmdp: debug
   pattern:
     dateformat: mm:ss.SSS
+app:
+  kafka:
+    seckill-topic: seckill-order-topic
+    retry:
+      max-attempts: 6 # 最大重试次数
+      base-delay-ms: 2000 # 基础延迟时间
+      max-delay-ms: 60000 # 最大延迟时间
+      auto-create-topics: true # 自动创建重试/死信主题
