@@ -11,6 +11,8 @@ import com.hmdp.service.IShopService;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
+import org.redisson.api.RBloomFilter;
+import org.redisson.api.RedissonClient;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
 import org.springframework.data.geo.GeoResults;
@@ -20,6 +22,7 @@ import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -45,9 +48,34 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Resource
     private CacheClient cacheClient;
 
+    @Resource
+    private RedissonClient redissonClient;
+
+    private RBloomFilter<Long> shopBloomFilter;
+
+    @PostConstruct
+    private void initShopBloomFilter() {
+        shopBloomFilter = redissonClient.getBloomFilter(SHOP_BLOOM_KEY);
+        if (!shopBloomFilter.isExists()) {
+            shopBloomFilter.tryInit(100_000L, 0.01); // 10万数据量，0.01误判率
+            // 将所有店铺id添加到布隆过滤器中
+            List<Shop> shopList = list();
+            for (Shop shop : shopList) {
+                shopBloomFilter.add(shop.getId());
+            }
+        }
+    }
+
     @Override
     public Result queryById(Long id) {
-        // 解决缓存穿透
+        if (id == null) {
+            return Result.fail("店铺不存在！");
+        }
+        // 布隆过滤器前置校验，防止缓存穿透
+        if (shopBloomFilter != null && !shopBloomFilter.contains(id)) {
+            return Result.fail("店铺不存在！");
+        }
+        // 解决缓存穿透 - 缓存空值
         Shop shop = cacheClient
                 .queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
@@ -122,6 +150,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
+    public boolean save(Shop shop) {
+        boolean success = super.save(shop);
+        if (success && shop != null && shop.getId() != null && shopBloomFilter != null) {
+            shopBloomFilter.add(shop.getId());
+        }
+        return success;
+    }
+
+    @Override
     @Transactional // 开启事务
     public Result update(Shop shop) {
         Long id = shop.getId();
@@ -130,6 +167,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         // 1.更新数据库
         updateById(shop);
+        if (shopBloomFilter != null) {
+            shopBloomFilter.add(id);
+        }
         // 2.删除缓存
         stringRedisTemplate.delete(CACHE_SHOP_KEY + id);
         return Result.ok();

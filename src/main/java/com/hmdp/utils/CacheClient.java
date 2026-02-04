@@ -36,6 +36,10 @@ public class CacheClient {
     }
 
     // 设置逻辑过期
+    // key: 缓存key
+    // value: 缓存值
+    // time: 过期时间
+    // unit: 过期时间单位
     public void setWithLogicalExpire(String key, Object value, Long time, TimeUnit unit) {
         // 设置逻辑过期
         RedisData redisData = new RedisData();
